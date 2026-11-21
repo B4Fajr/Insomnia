@@ -17,8 +17,10 @@ enum SessionMath {
     }
 
     /// Fresh session starting now.
-    static func newSession(now: Date, duration: TimeInterval, maxDuration: TimeInterval) -> Session {
-        Session(startedAt: now, endsAt: endsAt(start: now, duration: duration, maxDuration: maxDuration))
+    static func newSession(
+        now: Date, duration: TimeInterval, maxDuration: TimeInterval, trigger: Session.Trigger? = nil
+    ) -> Session {
+        Session(startedAt: now, endsAt: endsAt(start: now, duration: duration, maxDuration: maxDuration), trigger: trigger)
     }
 
     /// Push `endsAt` out by `extra` seconds, never past `now + maxDuration`.
@@ -60,35 +62,32 @@ enum SessionMath {
         return "\(minutes)m"
     }
 
-    /// Live menu bar countdown, ticking every second in a fixed `shape`.
-    ///
-    /// Partial seconds round *up*, so a fresh 30-minute session opens on
-    /// `30:00` and the text only reads all-zeros once the deadline is reached.
-    /// Negative input is floored at zero. Minutes and seconds are always two
-    /// digits; hours and days are never padded.
+    /// Live menu bar countdown in whole minutes and a fixed `shape`.
+    /// Round up so a fresh 30-minute session opens on `30m` and a session
+    /// with time left never displays zero.
     static func formatCountdown(remaining: TimeInterval, shape: CountdownShape) -> String {
-        let total = Int(max(remaining, 0).rounded(.up))
-        let seconds = total % 60
-        let minutes = (total / 60) % 60
+        let totalMinutes = Int((max(remaining, 0) / 60).rounded(.up))
+        let minutes = totalMinutes % 60
         func clock(hours: Int) -> String {
-            String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            String(format: "%d:%02d", hours, minutes)
         }
         switch shape {
         case .days:
-            let days = total / 86400
-            guard days > 0 else { return clock(hours: total / 3600) }
-            return "\(days)d " + clock(hours: (total % 86400) / 3600)
+            let hours = totalMinutes / 60
+            let days = hours / 24
+            guard days > 0 else { return clock(hours: hours) }
+            return "\(days)d " + clock(hours: hours % 24)
         case .hours:
-            return clock(hours: total / 3600)
+            return clock(hours: totalMinutes / 60)
         case .minutes:
-            return String(format: "%02d:%02d", total / 60, seconds)
+            return String(format: "%02dm", totalMinutes)
         }
     }
 
-    /// Next wall-clock minute boundary at or after `now` (for the redraw timer).
-    static func nextMinuteBoundary(after now: Date) -> Date {
-        let t = now.timeIntervalSinceReferenceDate
-        return Date(timeIntervalSinceReferenceDate: (floor(t / 60) + 1) * 60)
+    /// Next minute boundary after `now`, measured from the session deadline.
+    static func nextMinuteBoundary(after now: Date, relativeTo deadline: Date) -> Date {
+        let minutes = (now.timeIntervalSince(deadline) / 60).rounded(.down)
+        return deadline.addingTimeInterval((minutes + 1) * 60)
     }
 
     /// Next whole wall-clock second after `now` (for the 1 Hz countdown timer).
@@ -104,11 +103,11 @@ enum SessionMath {
 /// units drop off. The only mid-session change is `days` losing its day
 /// component once fewer than 24 hours remain.
 enum CountdownShape: Equatable, Sendable {
-    /// `Nd H:MM:SS` while a day or more remains, then `H:MM:SS`.
+    /// `Nd H:MM` while the display rounds to at least a day, then `H:MM`.
     case days
-    /// `H:MM:SS` for the whole session, even under an hour (`0:04:07`).
+    /// `H:MM` for the whole session, even under an hour (`0:04`).
     case hours
-    /// `MM:SS` for the whole session (`04:07`, `00:09`).
+    /// `MMm` for the whole session (`04m`, `01m`).
     case minutes
 
     init(initialDuration: TimeInterval) {

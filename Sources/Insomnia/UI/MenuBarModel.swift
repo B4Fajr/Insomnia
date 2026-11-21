@@ -48,9 +48,8 @@ final class MenuBarModel {
             return false
         }
 
-        /// The countdown and the hold-to-end ring belong to a confirmed
-        /// session only; a pending start must not draw them.
-        var showsRunningControls: Bool { self == .running }
+        /// The live countdown belongs to a confirmed session.
+        var showsLiveCountdown: Bool { self == .running }
     }
 
     /// What the item reads while a start is pending and there is no

@@ -18,8 +18,6 @@ enum Motion {
     static let snappy: Animation = .spring(response: 0.25, dampingFraction: 0.6)
     /// One digit roll of the 1 Hz countdown; must settle well inside a second.
     static let tick: Animation = .spring(response: 0.18, dampingFraction: 0.85)
-    /// How long the end button must be held before the session ends.
-    static let holdDuration: TimeInterval = 0.6
     /// Delay between consecutive pills appearing (reversed on collapse).
     static let stagger: TimeInterval = 0.04
     /// Scale a focused pill overshoots to before settling.
@@ -143,11 +141,6 @@ enum Motion {
     /// The countdown scaling in from (and out to) the mark's edge.
     static func countdownTransition(reduceMotion: Bool = Motion.reduceMotion) -> AnyTransition {
         reveal(scale: 0.7, anchor: .leading, reduceMotion: reduceMotion)
-    }
-
-    /// The hold-to-end ring growing in place.
-    static func ringTransition(reduceMotion: Bool = Motion.reduceMotion) -> AnyTransition {
-        reveal(scale: 0.5, anchor: .center, reduceMotion: reduceMotion)
     }
 
     /// The start-failed label: a fade in both modes.

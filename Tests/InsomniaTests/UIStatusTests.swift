@@ -13,7 +13,6 @@ final class UIStatusTests: XCTestCase {
             onTapIcon: {},
             onTapPill: { _ in },
             onTapCountdown: {},
-            onHoldEnd: {},
             onWidthChange: { _ in }
         )
 
@@ -43,14 +42,13 @@ final class UIStatusTests: XCTestCase {
                 onTapIcon: {},
                 onTapPill: { _ in },
                 onTapCountdown: {},
-                onHoldEnd: {},
                 onWidthChange: { _ in }
             )
             return StatusItemController.makeHostingView(root).fittingSize.width
         }
         let idle = MenuBarModel()
         let idleWidth = StatusItemController.makeHostingView(StatusRootView(
-            model: idle, manager: manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onHoldEnd: {}, onWidthChange: { _ in }
+            model: idle, manager: manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onWidthChange: { _ in }
         )).fittingSize.width
 
         model.visiblePills = 0
@@ -76,27 +74,25 @@ final class UIStatusTests: XCTestCase {
     func testProjectedStartCountdownMatchesTheSessionShape() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let month: TimeInterval = 30 * 24 * 3600
-        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 90 * 60, maxDuration: month), "1:30:00")
+        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 90 * 60, maxDuration: month), "1:30")
         let twoDays = MenuBarModel.projectedStartCountdown(now: now, duration: 2 * 86400, maxDuration: month)
         XCTAssertEqual(twoDays, SessionMath.formatCountdown(remaining: 2 * 86400, shape: .days))
         XCTAssertTrue(twoDays.hasPrefix("2d "))
-        // The projection ticks: eight seconds into the wait it reads eight
-        // seconds less, in the shape it was projected in.
+        // The projection only changes when a whole minute has elapsed.
         let projection = MenuBarModel.projectedStart(now: now, duration: 90 * 60, maxDuration: month)
         XCTAssertEqual(projection.shape, .hours)
         XCTAssertEqual(projection.endsAt, now.addingTimeInterval(90 * 60))
-        XCTAssertEqual(projection.countdown(at: now), "1:30:00")
-        XCTAssertEqual(projection.countdown(at: now.addingTimeInterval(8)), "1:29:52")
-        XCTAssertEqual(projection.countdown(at: now.addingTimeInterval(2 * 3600)), "0:00:00")
+        XCTAssertEqual(projection.countdown(at: now), "1:30")
+        XCTAssertEqual(projection.countdown(at: now.addingTimeInterval(8)), "1:30")
+        XCTAssertEqual(projection.countdown(at: now.addingTimeInterval(60)), "1:29")
+        XCTAssertEqual(projection.countdown(at: now.addingTimeInterval(2 * 3600)), "0:00")
         // A short start reads in the minutes shape, and the clamp applies.
-        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 30 * 60, maxDuration: month), "30:00")
-        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 5 * 3600, maxDuration: 3600), "1:00:00")
+        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 30 * 60, maxDuration: month), "30m")
+        XCTAssertEqual(MenuBarModel.projectedStartCountdown(now: now, duration: 5 * 3600, maxDuration: 3600), "1:00")
     }
 
     @MainActor
-    func testTickAnimationIsShorterThanBaseAndHoldIsSubSecond() {
-        XCTAssertEqual(Motion.holdDuration, 0.6, accuracy: 0.0001)
-        XCTAssertLessThan(Motion.holdDuration, 1)
+    func testTickAnimationIsShorterThanBase() {
         XCTAssertEqual(Motion.tick(reduceMotion: true), Motion.reduced)
         XCTAssertNotEqual(Motion.tick(reduceMotion: false), Motion.base)
     }
@@ -120,9 +116,9 @@ final class UIStatusTests: XCTestCase {
     /// it has to show at once, not wait for the manager to confirm it.
     @MainActor
     func testAPendingProjectionShowsOverTheLiveCountdown() {
-        XCTAssertEqual(StatusRootView.countdownText(pending: "2:00:00", live: "1:00:00", phase: .running), "2:00:00")
-        XCTAssertEqual(StatusRootView.countdownText(pending: "2:00:00", live: "", phase: .starting), "2:00:00")
-        XCTAssertEqual(StatusRootView.countdownText(pending: nil, live: "1:00:00", phase: .running), "1:00:00")
+        XCTAssertEqual(StatusRootView.countdownText(pending: "2:00", live: "1:00", phase: .running), "2:00")
+        XCTAssertEqual(StatusRootView.countdownText(pending: "2:00", live: "", phase: .starting), "2:00")
+        XCTAssertEqual(StatusRootView.countdownText(pending: nil, live: "1:00", phase: .running), "1:00")
         XCTAssertEqual(StatusRootView.countdownText(pending: nil, live: "", phase: .starting), MenuBarModel.startingText)
         XCTAssertEqual(StatusRootView.countdownText(pending: nil, live: "", phase: .idle), "")
     }
@@ -140,24 +136,22 @@ final class UIStatusTests: XCTestCase {
     }
 
     @MainActor
-    func testCountdownTextTicksInHoursShapeAndPausesWithLid() async {
+    func testCountdownTextTicksInHoursShape() async {
         let h = Harness()
         defer { h.home.destroy() }
         let m = h.makeManager()
         await m.start(duration: 4 * 3600)
-        XCTAssertEqual(m.countdownText, "4:00:00")
+        XCTAssertEqual(m.countdownText, "4:00")
         XCTAssertEqual(m.remainingText, "4h")
 
         h.clock.advance(3 * 3600 + 55 * 60 + 53)
         m.refreshCountdown()
-        XCTAssertEqual(m.countdownText, "0:04:07")
+        XCTAssertEqual(m.countdownText, "0:05")
         XCTAssertEqual(m.remainingText, "4m")
 
-        m.pauseCountdown()
         h.clock.advance(60)
-        XCTAssertEqual(m.countdownText, "0:04:07")
-        m.resumeCountdown()
-        XCTAssertEqual(m.countdownText, "0:03:07")
+        m.refreshCountdown()
+        XCTAssertEqual(m.countdownText, "0:04")
 
         await m.end(reason: .user)
         XCTAssertEqual(m.countdownText, "")
@@ -169,10 +163,10 @@ final class UIStatusTests: XCTestCase {
         defer { h.home.destroy() }
         let m = h.makeManager()
         await m.start(duration: 30 * 60)
-        XCTAssertEqual(m.countdownText, "30:00")
+        XCTAssertEqual(m.countdownText, "30m")
         h.clock.advance(29 * 60 + 51)
         m.refreshCountdown()
-        XCTAssertEqual(m.countdownText, "00:09")
+        XCTAssertEqual(m.countdownText, "01m")
     }
 
     func testSleepHeldLine() {
@@ -232,9 +226,9 @@ final class UIStatusTests: XCTestCase {
 
     func testThrottleWarning() {
         XCTAssertNil(StatusLines.throttleWarning([]))
-        XCTAssertEqual(StatusLines.throttleWarning(["Chrome"]), "\u{26A0} Chrome is throttled")
-        XCTAssertEqual(StatusLines.throttleWarning(["Chrome", "Arc"]), "\u{26A0} Chrome and Arc are throttled")
-        XCTAssertEqual(StatusLines.throttleWarning(["Chrome", "Arc", "Chromium"]), "\u{26A0} Chrome, Arc, and Chromium are throttled")
+        XCTAssertEqual(StatusLines.throttleWarning(["Chrome"]), "\u{26A0} Chrome may slow down when hidden")
+        XCTAssertEqual(StatusLines.throttleWarning(["Chrome", "Arc"]), "\u{26A0} Chrome and Arc may slow down when hidden")
+        XCTAssertEqual(StatusLines.throttleWarning(["Chrome", "Arc", "Chromium"]), "\u{26A0} Chrome, Arc, and Chromium may slow down when hidden")
     }
 
     func testMenuListsStatusThenSettingsAndQuit() {
@@ -244,30 +238,35 @@ final class UIStatusTests: XCTestCase {
             machine: "Lid: closed \u{00B7} 82%",
             actions: "3 apps frozen",
             throttledBrowsers: ["Chrome"],
-            error: nil
+            error: nil,
+            chargingAutomationEnabled: true
         )
         XCTAssertEqual(items, [
             StatusMenu.Item(title: "Sleep held per journal \u{2014} not verified live", kind: .info),
             StatusMenu.Item(title: "Lid: closed \u{00B7} 82%", kind: .info),
             StatusMenu.Item(title: "3 apps frozen", kind: .info),
-            StatusMenu.Item(title: "\u{26A0} Chrome is throttled", kind: .warning),
+            StatusMenu.Item(title: "\u{26A0} Chrome may slow down when hidden", kind: .warning),
             StatusMenu.Item(title: "Relaunch Chrome unthrottled", kind: .relaunchBrowser("Chrome")),
             StatusMenu.Item(title: "", kind: .separator),
+            StatusMenu.Item(title: StatusMenu.endSessionTitle, kind: .endSession),
+            StatusMenu.Item(title: StatusMenu.chargingTitle, kind: .chargingAutomation(true)),
             StatusMenu.Item(title: StatusMenu.settingsTitle, kind: .settings),
             StatusMenu.Item(title: StatusMenu.quitTitle, kind: .quit),
         ])
     }
 
-    func testIdleMenuIsJustSettingsAndQuitWithNoLeadingSeparator() {
+    func testIdleMenuShowsUncheckedChargingWithNoLeadingSeparator() {
         let items = StatusMenu.items(
             sessionActive: false,
             sleepHeld: false,
             machine: nil,
             actions: nil,
             throttledBrowsers: [],
-            error: ""
+            error: "",
+            chargingAutomationEnabled: false
         )
         XCTAssertEqual(items, [
+            StatusMenu.Item(title: StatusMenu.chargingTitle, kind: .chargingAutomation(false)),
             StatusMenu.Item(title: StatusMenu.settingsTitle, kind: .settings),
             StatusMenu.Item(title: StatusMenu.quitTitle, kind: .quit),
         ])
@@ -281,10 +280,11 @@ final class UIStatusTests: XCTestCase {
             machine: nil,
             actions: nil,
             throttledBrowsers: [],
-            error: "sudo: a password is required"
+            error: "sudo: a password is required",
+            chargingAutomationEnabled: false
         )
         XCTAssertEqual(items.first, StatusMenu.Item(title: "\u{26A0} sudo: a password is required", kind: .warning))
-        XCTAssertEqual(items.map(\.kind), [.warning, .separator, .settings, .quit])
+        XCTAssertEqual(items.map(\.kind), [.warning, .separator, .chargingAutomation(false), .settings, .quit])
     }
 
     /// Greptile caught this as a regression: replacing the popover with a
@@ -296,13 +296,14 @@ final class UIStatusTests: XCTestCase {
             machine: nil,
             actions: nil,
             throttledBrowsers: ["Chrome", "Arc"],
-            error: nil
+            error: nil,
+            chargingAutomationEnabled: false
         )
         XCTAssertEqual(items.filter { $0.kind == .relaunchBrowser("Chrome") }.count, 1)
         XCTAssertEqual(items.filter { $0.kind == .relaunchBrowser("Arc") }.count, 1)
         XCTAssertEqual(
             items.map(\.kind),
-            [.info, .warning, .relaunchBrowser("Chrome"), .relaunchBrowser("Arc"), .separator, .settings, .quit]
+            [.info, .warning, .relaunchBrowser("Chrome"), .relaunchBrowser("Arc"), .separator, .chargingAutomation(false), .settings, .quit]
         )
     }
 
@@ -427,7 +428,7 @@ final class UIStatusTests: XCTestCase {
             m.phase = phase
             m.pendingCountdown = model.pendingCountdown
             m.pendingProjection = model.pendingProjection
-            let root = StatusRootView(model: m, manager: manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onHoldEnd: {}, onWidthChange: { _ in })
+            let root = StatusRootView(model: m, manager: manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onWidthChange: { _ in })
             return max(StatusItemController.makeHostingView(root).fittingSize.width.rounded(.up), 24)
         }
 
@@ -1003,15 +1004,15 @@ final class UIStatusTests: XCTestCase {
         await gate.waitUntilStarted()
         XCTAssertEqual(controller.model.phase, .starting)
         XCTAssertEqual(controller.model.pendingProjection?.shape, .hours)
-        XCTAssertEqual(controller.model.pendingCountdown, "2:00:00")
+        XCTAssertEqual(controller.model.pendingCountdown, "2:00")
         XCTAssertTrue(controller.pendingTickArmed)
-        // Partial seconds round up, so the first whole second can still read
-        // 2:00:00; the second one cannot.
+        // Put the projected end near the next display change.
+        controller.model.pendingProjection = .init(endsAt: Date().addingTimeInterval(119 * 60 + 0.1), shape: .hours)
         let deadline = Date().addingTimeInterval(2.5)
-        while controller.model.pendingCountdown == "2:00:00", Date() < deadline {
+        while controller.model.pendingCountdown == "2:00", Date() < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
-        XCTAssertEqual(controller.model.pendingCountdown, "1:59:59")
+        XCTAssertEqual(controller.model.pendingCountdown, "1:59")
         XCTAssertEqual(controller.model.phase, .starting)
 
         await gate.open()
@@ -1023,7 +1024,7 @@ final class UIStatusTests: XCTestCase {
         XCTAssertFalse(controller.pendingTickArmed)
         XCTAssertNil(controller.model.pendingProjection)
         XCTAssertNil(controller.model.pendingCountdown)
-        XCTAssertEqual(manager.countdownText, "2:00:00")
+        XCTAssertEqual(manager.countdownText, "2:00")
     }
 
     /// The digits are read by a local key monitor, which only sees events sent

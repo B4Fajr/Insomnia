@@ -60,7 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(manager: manager, status: status) { [weak settings] in
             settings?.show()
         }
-        Task { await manager.reconcile() }
+        Task {
+            await manager.reconcile()
+            manager.services?.configureChargingAutomation(for: manager)
+        }
     }
 
     /// Quitting always ends the session (spec 1). Terminate is deferred until

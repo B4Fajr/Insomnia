@@ -17,6 +17,9 @@ final class PowerMonitor {
     /// Called on the main actor after any battery or thermal change.
     var onChange: (() -> Void)?
 
+    var onACPowerChange: ((Bool) -> Void)?
+    private var lastOnAC: Bool?
+
     private var source: CFRunLoopSource?
     private var thermalObserver: NSObjectProtocol?
 
@@ -24,7 +27,7 @@ final class PowerMonitor {
 
     func start() {
         guard source == nil, thermalObserver == nil else { return }
-        refreshBattery()
+        lastOnAC = refreshBattery()
         thermalState = ProcessInfo.processInfo.thermalState
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
@@ -58,10 +61,12 @@ final class PowerMonitor {
 
     /// Re-read the power source list synchronously. Cheap; used by the
     /// popover's on-demand refresh.
-    func refreshBattery() {
+    @discardableResult
+    func refreshBattery() -> Bool? {
         let snap = Self.readBattery()
         percent = snap.percent
         isCharging = snap.charging
+        return snap.onAC
     }
 
     /// Signed watts: negative while discharging, positive while charging.
@@ -82,10 +87,26 @@ final class PowerMonitor {
 
     // MARK: Reads
 
-    nonisolated static func readBattery() -> (percent: Int?, charging: Bool) {
-        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
-        else { return (nil, false) }
+    nonisolated static func readACPower() -> Bool? {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return nil }
+        return acPower(in: info)
+    }
+
+    nonisolated private static func acPower(in info: CFTypeRef) -> Bool? {
+        guard let source = IOPSGetProvidingPowerSourceType(info)?.takeUnretainedValue() as String? else { return nil }
+        switch source {
+        case kIOPSACPowerValue: return true
+        case kIOPSBatteryPowerValue: return false
+        default: return nil
+        }
+    }
+
+    nonisolated static func readBattery() -> (percent: Int?, charging: Bool, onAC: Bool?) {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else { return (nil, false, nil) }
+        let onAC = acPower(in: info)
+        guard let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef] else {
+            return (nil, false, onAC)
+        }
         for ps in list {
             guard let desc = IOPSGetPowerSourceDescription(info, ps)?.takeUnretainedValue() as? [String: Any] else { continue }
             guard desc[kIOPSTypeKey] as? String == kIOPSInternalBatteryType else { continue }
@@ -95,11 +116,11 @@ final class PowerMonitor {
             if let current, let max, max > 0 {
                 percent = Int((Double(current) / Double(max) * 100).rounded())
             }
-            let onAC = desc[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
+            let external = desc[kIOPSPowerSourceStateKey] as? String == kIOPSACPowerValue
             let charging = desc[kIOPSIsChargingKey] as? Bool ?? false
-            return (percent, onAC || charging)
+            return (percent, external || charging, onAC)
         }
-        return (nil, false)
+        return (nil, false, onAC)
     }
 
     nonisolated static func readInstantWatts() -> Double? {
@@ -129,11 +150,18 @@ final class PowerMonitor {
 
     private func handleBattery() {
         let before = (percent, isCharging)
-        refreshBattery()
+        observeACPower(refreshBattery())
         if before != (percent, isCharging) {
             Log.info("battery \(percent.map(String.init) ?? "n/a")% \(isCharging ? "charging" : "on battery")")
             onChange?()
         }
+    }
+
+    func observeACPower(_ onAC: Bool?) {
+        guard let onAC else { return }
+        let previous = lastOnAC
+        lastOnAC = onAC
+        if let previous, previous != onAC { onACPowerChange?(onAC) }
     }
 
     private func handleThermal() {

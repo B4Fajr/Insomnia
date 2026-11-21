@@ -32,7 +32,8 @@ final class SystemStatus {
 
 /// Owns and wires every system integration to the SessionManager.
 /// Constructed by `SessionManager.live()`; started when a session starts (or
-/// is found valid at reconcile) and stopped when it ends.
+/// is found valid at reconcile) and stopped when it ends. The power monitor
+/// also runs between sessions when charger automation is enabled.
 @MainActor
 final class AppServices {
     let status = SystemStatus()
@@ -96,8 +97,25 @@ final class AppServices {
         status.refresher = { [weak self] in await self?.refreshOnDemand() }
     }
 
+    func configureChargingAutomation(for manager: SessionManager) {
+        power.onACPowerChange = { [weak manager] onAC in
+            guard let manager else { return }
+            if onAC {
+                guard manager.config.startOnACPower, !manager.isActive else { return }
+                Task { await manager.startOnACConnection() }
+            } else if manager.session?.trigger == .charger {
+                Task { await manager.endOnACDisconnection() }
+            }
+        }
+        if running || manager.config.startOnACPower {
+            power.start()
+        } else {
+            power.stop()
+        }
+    }
+
     /// Called by SessionManager once a session is active.
-    func start(for manager: SessionManager) {
+    func start(for manager: SessionManager, applyClosedLidActions: Bool = false) {
         guard !running else { return }
         running = true
         self.manager = manager
@@ -137,10 +155,13 @@ final class AppServices {
         lidSimulation.start(directory: paths.appSupport, file: paths.simulateLidFile)
 
         power.onChange = { [weak self] in self?.powerChanged() }
-        power.start()
-        syncPower()
-        // Apply the floors once: the battery may already be below one.
-        powerChanged()
+        configureChargingAutomation(for: manager)
+        if applyClosedLidActions && status.lidClosed {
+            lidChanged(true)
+        } else {
+            // Apply the floors once: the battery may already be below one.
+            powerChanged()
+        }
 
         let net = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { [weak manager] in
             manager?.config ?? Config()
@@ -166,7 +187,7 @@ final class AppServices {
         lid.onChange = nil
         lidSimulation.stop()
         lidSimulation.onEvent = nil
-        power.stop()
+        if manager?.config.startOnACPower != true { power.stop() }
         power.onChange = nil
         sampleTimer?.cancel()
         sampleTimer = nil
@@ -258,6 +279,7 @@ final class AppServices {
 
     private func lidChanged(_ closed: Bool) {
         status.lidClosed = closed
+        if !closed { manager?.refreshCountdown() }
         guard let actions = lidActions else { return }
         let previous = lidTasks.last
         let task = Task { @MainActor in

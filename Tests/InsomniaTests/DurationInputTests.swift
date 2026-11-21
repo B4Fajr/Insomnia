@@ -164,6 +164,17 @@ final class DurationInputTests: XCTestCase {
         XCTAssertEqual(DurationInput.Field.minutes.help, "0\u{2013}59")
     }
 
+    func testChargingDurationInputUsesHours() {
+        let locale = Locale(identifier: "en_CA")
+        XCTAssertEqual(DurationParser.seconds(fromHours: "18", locale: locale), 64_800)
+        XCTAssertEqual(DurationParser.seconds(fromHours: "1.5", locale: locale), 5_400)
+        XCTAssertEqual(DurationParser.seconds(fromHours: "8.3333", locale: locale), 30_000)
+        XCTAssertEqual(DurationParser.seconds(fromHours: "1,5", locale: Locale(identifier: "fr_CA")), 5_400)
+        XCTAssertNil(DurationParser.seconds(fromHours: "30m", locale: locale))
+        XCTAssertNil(DurationParser.seconds(fromHours: "inf", locale: locale))
+        XCTAssertNil(DurationParser.seconds(fromHours: "0", locale: locale))
+    }
+
     // MARK: DurationParser (settings presets)
 
     func testParserUnits() {

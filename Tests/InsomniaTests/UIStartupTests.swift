@@ -5,11 +5,8 @@ import XCTest
 /// Enter on the start pills, from the keystroke to the helper's answer.
 ///
 /// The bug this pins: the status item used to switch to the running layout
-/// (countdown text plus the hold-to-end ring) the moment Enter was pressed,
-/// before the manager had confirmed anything. When the recovery agent then
-/// took seconds to refuse, the user sat on an eye, a blank countdown and an
-/// inert end ring with no session behind them. The start now has a phase of
-/// its own, and the running controls only appear for a confirmed session.
+/// the moment Enter was pressed, before the manager had confirmed anything.
+/// A pending start now has its own phase and shows a projected countdown.
 final class UIStartupTests: XCTestCase {
     /// A refused start reopens the pills, and with them the key-catcher
     /// panel. Tests that end there must not leave it up for the next test.
@@ -54,7 +51,6 @@ final class UIStartupTests: XCTestCase {
                 onTapIcon: {},
                 onTapPill: { _ in },
                 onTapCountdown: {},
-                onHoldEnd: {},
                 onWidthChange: { _ in }
             )
             return StatusItemController.makeHostingView(root).fittingSize.width
@@ -83,7 +79,7 @@ final class UIStartupTests: XCTestCase {
         rig.openAndTypeOneDay()
         let idleWidth: CGFloat = {
             let m = MenuBarModel()
-            let root = StatusRootView(model: m, manager: rig.manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onHoldEnd: {}, onWidthChange: { _ in })
+            let root = StatusRootView(model: m, manager: rig.manager, onTapIcon: {}, onTapPill: { _ in }, onTapCountdown: {}, onWidthChange: { _ in })
             return StatusItemController.makeHostingView(root).fittingSize.width
         }()
 
@@ -93,10 +89,10 @@ final class UIStartupTests: XCTestCase {
         // Pending, readable, and nothing that only a live session may show.
         XCTAssertFalse(rig.manager.isActive)
         XCTAssertEqual(rig.model.phase, .starting)
-        XCTAssertFalse(rig.model.phase.showsRunningControls)
+        XCTAssertFalse(rig.model.phase.showsLiveCountdown)
         // The countdown the session will read is projected the moment Enter
         // is pressed; the live one replaces it on confirmation.
-        XCTAssertEqual(rig.model.pendingCountdown, "1d 0:00:00")
+        XCTAssertEqual(rig.model.pendingCountdown, "1d 0:00")
         XCTAssertEqual(MenuBarModel.startingText, "Starting\u{2026}")
         XCTAssertNil(rig.model.startError)
         // The typed value survives the wait, in case the start is refused.
@@ -107,10 +103,10 @@ final class UIStartupTests: XCTestCase {
         await gate.open()
         let ok = await waitUntil { rig.manager.isActive && rig.model.phase == .running }
         XCTAssertTrue(ok)
-        XCTAssertTrue(rig.model.phase.showsRunningControls)
+        XCTAssertTrue(rig.model.phase.showsLiveCountdown)
         XCTAssertNil(rig.model.pendingCountdown)
         XCTAssertNil(rig.model.startError)
-        XCTAssertEqual(rig.manager.countdownText, "1d 0:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "1d 0:00")
         XCTAssertEqual(rig.h.backstop.arms, 1)
     }
 
@@ -130,7 +126,7 @@ final class UIStartupTests: XCTestCase {
         await gate.open()
         let ok = await waitUntil { rig.model.phase == .running }
         XCTAssertTrue(ok)
-        XCTAssertEqual(rig.manager.countdownText, "4:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "4:00")
     }
 
     // MARK: Failure
@@ -213,7 +209,7 @@ final class UIStartupTests: XCTestCase {
         ok = await waitUntil { rig.model.startError == nil }
         XCTAssertTrue(ok)
         XCTAssertFalse(rig.model.slotsPresent)
-        XCTAssertEqual(rig.manager.countdownText, "1d 0:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "1d 0:00")
     }
 
     /// Typing after a refusal dismisses the error; so does closing the pills.
@@ -251,12 +247,12 @@ final class UIStartupTests: XCTestCase {
         XCTAssertEqual(rig.model.phase, .starting)
         let bounces = rig.model.rejectBounce
 
-        // Enter again, the mark, the countdown spot, the end ring: none of
+        // Enter again, the mark, the countdown spot, the end action: none of
         // them may start a second session or leave the pending phase.
         rig.controller.commit()
         rig.controller.iconTapped()
         rig.controller.customExtend()
-        rig.controller.holdToEnd()
+        rig.controller.menuEndSession()
         await settleQueuedRequests()
         XCTAssertEqual(rig.model.phase, .starting)
         XCTAssertEqual(rig.model.rejectBounce, bounces)
@@ -310,23 +306,21 @@ final class UIStartupTests: XCTestCase {
         await second.waitUntilStarted()
         await settleQueuedRequests()
         try? await Task.sleep(for: .milliseconds(200))
-        XCTAssertEqual(rig.manager.countdownText, "2:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "2:00")
         XCTAssertEqual(rig.model.pendingCountdown, projection)
         XCTAssertEqual(rig.model.phase, .running)
 
         await second.open()
         ok = await waitUntil { rig.model.pendingCountdown == nil }
         XCTAssertTrue(ok)
-        XCTAssertEqual(rig.manager.countdownText, "4:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "4:00")
         XCTAssertEqual(rig.model.phase, .running)
     }
 
     // MARK: Running controls
 
-    /// The countdown and the end ring are for a confirmed session only, and
-    /// `.running` on its own does not prove one: the phase can lag the
-    /// manager by a hop when a session ends. In that window the item must
-    /// not offer an end ring and a countdown for a session that is gone.
+    /// The live countdown requires both the running phase and an active
+    /// session because the phase can lag the manager when a session ends.
     @MainActor
     func testRunningControlsNeedBothTheRunningPhaseAndALiveSession() async {
         let rig = Rig()
@@ -337,7 +331,7 @@ final class UIStartupTests: XCTestCase {
         // Running phase with no session behind it: the bare mark, nothing else.
         rig.model.phase = .running
         XCTAssertFalse(rig.manager.isActive)
-        XCTAssertTrue(rig.model.phase.showsRunningControls)
+        XCTAssertTrue(rig.model.phase.showsLiveCountdown)
         XCTAssertEqual(rig.measuredWidth(), idleWidth)
 
         // A confirmed session lays the controls out.
@@ -354,14 +348,14 @@ final class UIStartupTests: XCTestCase {
         XCTAssertEqual(StatusItemController.phase(forActive: true, phase: .starting), .running)
         XCTAssertNil(StatusItemController.phase(forActive: false, phase: .starting))
         XCTAssertFalse(MenuBarModel.Phase.starting.isEntering)
-        XCTAssertFalse(MenuBarModel.Phase.starting.showsRunningControls)
-        XCTAssertFalse(MenuBarModel.Phase.idle.showsRunningControls)
-        XCTAssertFalse(MenuBarModel.Phase.entering(.start).showsRunningControls)
-        XCTAssertTrue(MenuBarModel.Phase.running.showsRunningControls)
+        XCTAssertFalse(MenuBarModel.Phase.starting.showsLiveCountdown)
+        XCTAssertFalse(MenuBarModel.Phase.idle.showsLiveCountdown)
+        XCTAssertFalse(MenuBarModel.Phase.entering(.start).showsLiveCountdown)
+        XCTAssertTrue(MenuBarModel.Phase.running.showsLiveCountdown)
     }
 
     /// Extending keeps the old behaviour: the session is live, so the
-    /// countdown and the end ring stay up while the extend is in flight.
+    /// countdown stays up while the extend is in flight.
     @MainActor
     func testExtendStaysOnTheRunningControlsWhileInFlight() async {
         let rig = Rig()
@@ -383,7 +377,7 @@ final class UIStartupTests: XCTestCase {
         ok = await waitUntil { rig.model.pendingCountdown == nil }
         XCTAssertTrue(ok)
         XCTAssertEqual(rig.model.phase, .running)
-        XCTAssertEqual(rig.manager.countdownText, "2:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "2:00")
     }
 
     /// The user ends the session while an extend is still waiting on the
@@ -405,9 +399,9 @@ final class UIStartupTests: XCTestCase {
         await gate.waitUntilStarted()
         XCTAssertEqual(rig.model.phase, .running)
 
-        // Hold-to-end while the extend waits: the end queues behind it and
+        // End session while the extend waits: the end queues behind it and
         // invalidates it.
-        rig.controller.holdToEnd()
+        rig.controller.menuEndSession()
         await settleQueuedRequests()
         await gate.open()
         ok = await waitUntil { !rig.manager.isActive && rig.model.phase == .idle }
@@ -448,7 +442,7 @@ final class UIStartupTests: XCTestCase {
 
         XCTAssertTrue(rig.manager.isActive)
         XCTAssertEqual(rig.manager.session?.endsAt, endsAt)
-        XCTAssertEqual(rig.manager.countdownText, "1:00:00")
+        XCTAssertEqual(rig.manager.countdownText, "1:00")
         XCTAssertEqual(rig.manager.lastError, "could not confirm backstop: fake launchd refused")
         XCTAssertEqual(rig.model.phase, .running)
         XCTAssertNil(rig.model.startError)

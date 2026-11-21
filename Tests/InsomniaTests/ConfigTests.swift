@@ -9,6 +9,8 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(c.endFloor, 10)
         XCTAssertEqual(c.nudgeThreshold, 90)
         XCTAssertEqual(c.maxDuration, 30 * 24 * 3600)
+        XCTAssertFalse(c.startOnACPower)
+        XCTAssertEqual(c.acSessionDuration, 18 * 3600)
         XCTAssertEqual(c.freezeList, ["com.tinyspeck.slackmacgap", "net.whatsapp.WhatsApp", "com.hnc.Discord"])
         XCTAssertTrue(c.agentList.contains("com.apple.Terminal"))
         XCTAssertTrue(c.agentList.contains("com.t3tools.t3code"))
@@ -92,6 +94,8 @@ final class ConfigTests: XCTestCase {
 
     func testRoundTrip() throws {
         var c = Config()
+        c.startOnACPower = true
+        c.acSessionDuration = 90 * 60
         c.hotspotSSID = "iPhone"
         c.tmuxTargets = ["main:0.1"]
         c.presets = [60]

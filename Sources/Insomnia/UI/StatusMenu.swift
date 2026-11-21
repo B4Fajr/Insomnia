@@ -1,10 +1,10 @@
 import AppKit
 
 /// The right-click menu on the status item: a read-only status block, then
-/// Settings and Quit, which live here and nowhere else.
+/// session controls, Settings and Quit.
 ///
 /// The item list is pure so the ordering and the omission rules can be
-/// tested without a menu bar; `menu(_:target:settings:quit:)` is the only
+/// tested without a menu bar; `menu` is the only
 /// part that touches AppKit.
 enum StatusMenu {
     struct Item: Equatable {
@@ -12,6 +12,8 @@ enum StatusMenu {
             case info
             case warning
             case separator
+            case endSession
+            case chargingAutomation(Bool)
             case settings
             case quit
             /// Relaunch this browser with the occlusion flags. Carries the
@@ -25,8 +27,10 @@ enum StatusMenu {
 
     static let settingsTitle = "Settings\u{2026}"
     static let quitTitle = "Quit Insomnia"
+    static let endSessionTitle = "End session"
+    static let chargingTitle = "Charger Triggered Session"
 
-    /// Disabled status lines, a separator, then Settings… and Quit. Empty
+    /// Disabled status lines, a separator, then session controls, Settings… and Quit. Empty
     /// lines are dropped, and the separator only appears when something
     /// precedes it, so the menu never opens with a stray rule at the top.
     static func items(
@@ -35,7 +39,8 @@ enum StatusMenu {
         machine: String?,
         actions: String?,
         throttledBrowsers: [String],
-        error: String?
+        error: String?,
+        chargingAutomationEnabled: Bool
     ) -> [Item] {
         var out: [Item] = []
         if let held = SleepHeldLine.line(sessionActive: sessionActive, sleepHeld: sleepHeld) {
@@ -62,6 +67,10 @@ enum StatusMenu {
         if !out.isEmpty {
             out.append(Item(title: "", kind: .separator))
         }
+        if sessionActive {
+            out.append(Item(title: endSessionTitle, kind: .endSession))
+        }
+        out.append(Item(title: chargingTitle, kind: .chargingAutomation(chargingAutomationEnabled)))
         out.append(Item(title: settingsTitle, kind: .settings))
         out.append(Item(title: quitTitle, kind: .quit))
         return out
@@ -74,11 +83,13 @@ enum StatusMenu {
 
     /// Build the AppKit menu. Status lines are disabled small text; warnings
     /// are orange. `autoenablesItems` is off so the disabled lines stay
-    /// disabled and the two actions stay live without validation.
+    /// disabled and actions stay live without validation.
     @MainActor
     static func menu(
         _ items: [Item],
         target: AnyObject?,
+        endSession: Selector,
+        toggleCharging: Selector,
         settings: Selector,
         quit: Selector,
         relaunchBrowser: Selector
@@ -100,6 +111,12 @@ enum StatusMenu {
                     attributes[.foregroundColor] = NSColor.systemOrange
                 }
                 entry.attributedTitle = NSAttributedString(string: item.title, attributes: attributes)
+                menu.addItem(entry)
+            case .endSession:
+                menu.addItem(action(title: item.title, selector: endSession, key: "", target: target))
+            case let .chargingAutomation(enabled):
+                let entry = action(title: item.title, selector: toggleCharging, key: "", target: target)
+                entry.state = enabled ? .on : .off
                 menu.addItem(entry)
             case .settings:
                 menu.addItem(action(title: item.title, selector: settings, key: ",", target: target))

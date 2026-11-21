@@ -81,7 +81,7 @@ enum StatusLines {
         return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
-    /// "⚠ Chrome is throttled" / "⚠ Chrome and Arc are throttled".
+    /// Warn about Chromium browsers launched with normal background settings.
     static func throttleWarning(_ browsers: [String]) -> String? {
         guard !browsers.isEmpty else { return nil }
         let names: String
@@ -90,7 +90,7 @@ enum StatusLines {
         case 2: names = "\(browsers[0]) and \(browsers[1])"
         default: names = browsers.dropLast().joined(separator: ", ") + ", and " + browsers.last!
         }
-        return "\u{26A0} \(names) \(browsers.count == 1 ? "is" : "are") throttled"
+        return "\u{26A0} \(names) may slow down when hidden"
     }
 }
 

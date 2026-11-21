@@ -8,7 +8,7 @@ import SwiftUI
 /// reports its width once per such change; the controller writes the
 /// status item's length to it once (`StatusWidthWriter`), decoupled from
 /// this layout. Everything that animates inside (the pills staggering in and out,
-/// the focus ring, the countdown and the ring coming and going) is scale,
+/// the focus ring and the countdown) is scale,
 /// offset and opacity, anchored at the leading edge so the bar reads as
 /// growing out of the mark; the bar narrows only once the content on its
 /// way out has gone.
@@ -18,7 +18,6 @@ struct StatusRootView: View {
     let onTapIcon: () -> Void
     let onTapPill: (DurationInput.Field) -> Void
     let onTapCountdown: () -> Void
-    let onHoldEnd: () -> Void
     let onWidthChange: (CGFloat) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotionEnv
@@ -36,13 +35,9 @@ struct StatusRootView: View {
     private var reduceMotion: Bool { reduceMotionEnv || Motion.reduceMotion }
     /// Sleep is held right now (journal-backed), independent of the UI phase.
     private var isRunning: Bool { manager.isActive }
-    /// Both, not either: the phase can lag the manager by a hop when a
-    /// session ends, and that window must not offer an end ring and a
-    /// countdown for a session that is already gone.
-    private var showsRunningControls: Bool { model.phase.showsRunningControls && isRunning }
-    /// A pending start shows its projected countdown; a confirmed session its
-    /// live one.
-    private var showsCountdown: Bool { model.phase == .starting || showsRunningControls }
+    /// Show the projection during startup and the live countdown only
+    /// while the manager still has an active session.
+    private var showsCountdown: Bool { model.phase == .starting || (model.phase.showsLiveCountdown && isRunning) }
     /// The eye opens the moment Enter starts a session, not when the manager
     /// confirms it: the blink is the first thing that answers the keystroke.
     /// A refused start closes it again with the pills coming back.
@@ -79,10 +74,6 @@ struct StatusRootView: View {
                 }
             } else if showsCountdown {
                 countdown
-                if showsRunningControls {
-                    HoldToEndButton(reduceMotion: reduceMotion, action: onHoldEnd)
-                        .transition(Motion.ringTransition(reduceMotion: reduceMotion))
-                }
             }
         }
         .padding(.leading, 6)
@@ -182,7 +173,7 @@ struct StatusRootView: View {
     /// is pending: the manager has to arm the recovery agent and disable
     /// sleep first, and either can take seconds. The projection is what the
     /// session will read once confirmed, so the live text replaces it
-    /// without a jump; the hold-to-end ring waits for the confirmation.
+    /// without a jump.
     private var countdown: some View {
         Text(countdownText)
             .font(.system(size: 13, weight: .medium, design: .rounded))

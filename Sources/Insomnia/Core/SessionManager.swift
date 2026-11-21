@@ -5,6 +5,7 @@ enum EndReason: String, Sendable {
     case timer
     case user
     case quit
+    case chargerDisconnected
     case batteryFloor
     case thermalCritical
     case backstop
@@ -68,7 +69,7 @@ final class SessionManager {
     var config: Config
     /// Minute-granularity remaining time for the popover ("2h 14m").
     private(set) var remainingText: String = ""
-    /// Live `H:MM:SS` countdown for the status item, updated at 1 Hz.
+    /// Live countdown for the status item, displayed in whole minutes.
     private(set) var countdownText: String = ""
     /// Last failure worth showing in the menu; cleared on the next success.
     private(set) var lastError: String?
@@ -121,10 +122,8 @@ final class SessionManager {
     @ObservationIgnored private var deadlineTimer: Timer?
     @ObservationIgnored private var countdownTimer: Timer?
     @ObservationIgnored private var retryTimer: Timer?
-    /// Whether the 1 Hz redraw is currently on the run loop. Tests assert on
-    /// this to prove an idle session leaves no repeating wakeup behind.
+    /// Whether a live countdown is scheduled. An idle session has no redraw timer.
     var countdownTimerArmed: Bool { countdownTimer != nil }
-    @ObservationIgnored private var countdownPaused = false
 
     /// Counts end requests. Start, extend and Low Power changes capture it
     /// when requested and compare after each await, so an end that arrived
@@ -284,6 +283,20 @@ final class SessionManager {
         return false
     }
 
+    func updateConfig(_ change: (inout Config) -> Void) {
+        var updated = config
+        change(&updated)
+        guard updated != config else { return }
+        do {
+            try store.saveConfig(updated)
+            let chargingChanged = updated.startOnACPower != config.startOnACPower
+            config = updated
+            if chargingChanged { services?.configureChargingAutomation(for: self) }
+        } catch {
+            Log.error("could not save config: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: Start / extend / end
 
     /// Start a session of `duration` seconds (clamped to `config.maxDuration`).
@@ -296,6 +309,22 @@ final class SessionManager {
     /// undone from the journal like an end, and the journal keeps the entry
     /// until that undo is confirmed.
     func start(duration: TimeInterval) async {
+        await start(duration: duration, onACPower: nil)
+    }
+
+    func startOnACConnection(
+        onACPower: @escaping @MainActor @Sendable () -> Bool? = { PowerMonitor.readACPower() }
+    ) async {
+        guard !isActive, config.startOnACPower else { return }
+        await start(duration: config.acSessionDuration, onACPower: onACPower)
+    }
+
+    func endOnACDisconnection() async {
+        guard session?.trigger == .charger else { return }
+        await end(reason: .chargerDisconnected)
+    }
+
+    private func start(duration: TimeInterval, onACPower: (@MainActor @Sendable () -> Bool?)?) async {
         guard !quitRequested else {
             Log.info("start ignored: quit requested")
             return
@@ -305,10 +334,14 @@ final class SessionManager {
             return
         }
         let ticket = endTicket
-        _ = await exclusive("start") { await self.performStart(duration: duration, ticket: ticket) }
+        _ = await exclusive("start") {
+            await self.performStart(duration: duration, ticket: ticket, onACPower: onACPower)
+        }
     }
 
-    private func performStart(duration: TimeInterval, ticket: Int) async {
+    private func performStart(
+        duration: TimeInterval, ticket: Int, onACPower: (@MainActor @Sendable () -> Bool?)?
+    ) async {
         guard session == nil else {
             Log.info("start ignored: session already active")
             return
@@ -317,8 +350,12 @@ final class SessionManager {
             Log.info("start abandoned: an end was requested first")
             return
         }
+        if let onACPower, !config.startOnACPower || onACPower() != true { return }
         let now = clock()
-        let new = SessionMath.newSession(now: now, duration: duration, maxDuration: config.maxDuration)
+        let new = SessionMath.newSession(
+            now: now, duration: duration, maxDuration: config.maxDuration,
+            trigger: onACPower == nil ? nil : .charger
+        )
         // What was on disk before this attempt, read under the lock. A
         // rollback puts exactly this back: an entry an earlier failed restore
         // left behind is evidence, not something this start may clear.
@@ -349,6 +386,10 @@ final class SessionManager {
             return
         }
 
+        if let onACPower, !config.startOnACPower || onACPower() != true {
+            rollBackStart(journal: journalBefore, session: sessionBefore)
+            return
+        }
         do {
             try await sleepGuard.setSleepDisabled(true)
         } catch {
@@ -364,12 +405,16 @@ final class SessionManager {
             return
         }
 
+        if onACPower?() == false {
+            _ = await performEnd(reason: .chargerDisconnected)
+            return
+        }
         session = new
         lastError = nil
         Log.info("session started until \(iso(new.endsAt)) (\(Int(duration))s requested)")
         await armDeadline(new.endsAt)
         // App Nap defaults and every observer live in AppServices.
-        services?.start(for: self)
+        services?.start(for: self, applyClosedLidActions: onACPower != nil)
         // PR3: schedule "5 minutes left" notification.
     }
 
@@ -857,11 +902,11 @@ final class SessionManager {
 
     // MARK: Reconcile (spec section 8)
 
-    func reconcile() async {
-        _ = await exclusive("reconcile") { await self.performReconcile() }
+    func reconcile(onACPower: @escaping @MainActor @Sendable () -> Bool? = { PowerMonitor.readACPower() }) async {
+        _ = await exclusive("reconcile") { await self.performReconcile(onACPower: onACPower) }
     }
 
-    private func performReconcile() async {
+    private func performReconcile(onACPower: @MainActor @Sendable () -> Bool?) async {
         let now = clock()
         var onDisk: Session?
         do {
@@ -876,6 +921,10 @@ final class SessionManager {
             // sleep. Any failure ends the session rather than holding sleep
             // with nothing guaranteed to release it.
             session = s
+            if s.trigger == .charger, onACPower() == false {
+                _ = await performEnd(reason: .chargerDisconnected)
+                return
+            }
             do {
                 try await backstop.arm()
             } catch {
@@ -898,6 +947,10 @@ final class SessionManager {
             } catch {
                 fail("could not re-apply sleep guard: \(error.localizedDescription); ending session")
                 _ = await performEnd(reason: .recoveryUnavailable)
+                return
+            }
+            if s.trigger == .charger, onACPower() == false {
+                _ = await performEnd(reason: .chargerDisconnected)
                 return
             }
             Log.info("reconcile: session valid until \(iso(s.endsAt))")
@@ -946,26 +999,10 @@ final class SessionManager {
         }
     }
 
-    // MARK: Countdown (1 Hz redraw)
-
-    /// Stop the countdown redraw. The lid observer calls this on lid close,
-    /// which is what keeps a 1 Hz timer from costing battery in the bag.
-    func pauseCountdown() {
-        countdownPaused = true
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-    }
-
-    /// Restart the countdown redraw. The lid observer calls this on lid open.
-    func resumeCountdown() {
-        countdownPaused = false
-        refreshCountdown()
-        armCountdownTimer()
-    }
+    // MARK: Countdown
 
     /// Recompute `remainingText` and `countdownText` from the injected clock.
-    /// Each is only assigned when it changes, so observers are not woken every
-    /// second for the minute-granularity text.
+    /// Assign only changed text, including when a lid-open event refreshes early.
     func refreshCountdown() {
         guard let s = session else {
             remainingText = ""
@@ -975,8 +1012,8 @@ final class SessionManager {
         let remaining = s.remaining(at: clock())
         let minute = SessionMath.formatRemaining(remaining)
         if remainingText != minute { remainingText = minute }
-        let second = SessionMath.formatCountdown(remaining: remaining, shape: s.countdownShape)
-        if countdownText != second { countdownText = second }
+        let countdown = SessionMath.formatCountdown(remaining: remaining, shape: s.countdownShape)
+        if countdownText != countdown { countdownText = countdown }
     }
 
     // MARK: Private
@@ -1018,22 +1055,20 @@ final class SessionManager {
         deadlineTimer = timer
 
         refreshCountdown()
-        if !countdownPaused { armCountdownTimer() }
+        armCountdownTimer(endsAt: endsAt)
     }
 
-    /// 1 Hz redraw aligned to whole wall-clock seconds so the digits change
-    /// in step with the menu bar clock. `pauseCountdown()` stops it entirely
-    /// while the lid is closed.
-    private func armCountdownTimer() {
+    /// Refresh at the minute boundaries of this deadline. A lid event can
+    /// refresh the text early, but the timer stays armed throughout the session.
+    private func armCountdownTimer(endsAt: Date) {
         countdownTimer?.invalidate()
         countdownTimer = nil
-        // Nothing to redraw without a session. Guarding here rather than in
-        // `resumeCountdown` covers every caller: a session that ends while the
-        // lid is shut would otherwise leave lid-open arming a 1 Hz timer that
-        // wakes the run loop forever to format an empty string.
-        guard session != nil else { return }
-        let first = SessionMath.nextSecondBoundary(after: clock())
-        let timer = Timer(fire: first, interval: 1, repeats: true) { [weak self] _ in
+        let now = clock()
+        guard now < endsAt else { return }
+        // Let both rounded labels cross the boundary before reading the clock.
+        let first = SessionMath.nextMinuteBoundary(after: now, relativeTo: endsAt)
+            .addingTimeInterval(0.05)
+        let timer = Timer(fire: first, interval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refreshCountdown() }
         }
         timer.tolerance = 0.1
@@ -1079,6 +1114,7 @@ final class SessionManager {
         case .timer: "Time is up. Sleep is back to normal."
         case .user: "Ended by you. Sleep is back to normal."
         case .quit: "Insomnia quit. Sleep is back to normal."
+        case .chargerDisconnected: "Power was disconnected. Sleep is back to normal."
         case .batteryFloor: "Battery fell below \(config.endFloor)%. Sleep is back to normal."
         case .thermalCritical: "Thermal state is critical. Sleep is back to normal."
         case .backstop: "A previous session left changes behind; everything has been undone."

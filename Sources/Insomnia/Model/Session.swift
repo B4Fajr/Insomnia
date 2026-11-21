@@ -3,15 +3,23 @@ import Foundation
 /// An active keep-awake session. `endsAt` is the only thing that keeps sleep
 /// disabled; everything else is bookkeeping.
 struct Session: Codable, Equatable, Sendable {
+    enum Trigger: String, Codable, Sendable {
+        case charger
+    }
+
     var startedAt: Date
     var endsAt: Date
     /// Every extension applied, in order, in seconds.
     var extensions: [TimeInterval]
 
-    init(startedAt: Date, endsAt: Date, extensions: [TimeInterval] = []) {
+    // Older records have no trigger, so they never end on a charger disconnect.
+    let trigger: Trigger?
+
+    init(startedAt: Date, endsAt: Date, extensions: [TimeInterval] = [], trigger: Trigger? = nil) {
         self.startedAt = startedAt
         self.endsAt = endsAt
         self.extensions = extensions
+        self.trigger = trigger
     }
 
     /// Seconds left until `endsAt`, never negative.

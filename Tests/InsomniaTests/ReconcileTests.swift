@@ -245,15 +245,28 @@ final class ReconcileTests: XCTestCase {
         XCTAssertEqual(h.backstop.arms, 2)
     }
 
-    func testCountdownPauseResume() async throws {
-        let m = h.makeManager()
-        await m.start(duration: 3600)
-        XCTAssertEqual(m.remainingText, "1h")
-        m.pauseCountdown()
-        h.clock.advance(120)
-        XCTAssertEqual(m.remainingText, "1h")
-        m.resumeCountdown()
-        XCTAssertEqual(m.remainingText, "58m")
+    func testCountdownTimerFiresAtTheNextDeadlineMinute() async throws {
+        let now = Date()
+        let m = SessionManager(
+            paths: h.home.paths,
+            sleepGuard: h.guardFake,
+            processControl: h.procs,
+            backstop: h.backstop,
+            clock: { Date() }
+        )
+        try h.store.saveSession(Session(
+            startedAt: now.addingTimeInterval(-60),
+            endsAt: now.addingTimeInterval(121.5)
+        ))
+        await m.reconcile()
+        XCTAssertEqual(m.countdownText, "03m")
+        let timeout = now.addingTimeInterval(5)
+        while m.countdownText == "03m" && Date() < timeout {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(m.countdownText, "02m")
+        await m.end(reason: .user)
+        XCTAssertFalse(m.countdownTimerArmed)
     }
 
     func testDeadlineTimerFiresEnd() async throws {

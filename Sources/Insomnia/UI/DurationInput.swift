@@ -165,6 +165,15 @@ struct DurationInput: Equatable, Sendable {
 
 /// Parses the short durations typed into settings ("30m", "2h", "1h30m", "3d").
 enum DurationParser {
+    /// Numeric hours for the charging setting. Store whole seconds.
+    static func seconds(fromHours text: String, locale: Locale = .current) -> TimeInterval? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: locale.decimalSeparator ?? ".", with: ".")
+        guard let hours = Double(value), hours > 0 else { return nil }
+        let seconds = (hours * 3600).rounded()
+        return seconds.isFinite && seconds > 0 ? seconds : nil
+    }
+
     /// Seconds, or nil when the text is not a duration. Bare numbers are minutes.
     static func seconds(from text: String) -> TimeInterval? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

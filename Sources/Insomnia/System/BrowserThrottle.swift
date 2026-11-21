@@ -168,7 +168,8 @@ final class BrowserThrottle {
         let ids = ChromiumFlags.chromiumBundleIds(config: config)
         var out: [BrowserStatus] = []
         for app in NSWorkspace.shared.runningApplications {
-            guard let id = app.bundleIdentifier, ids.contains(id) else { continue }
+            guard app.activationPolicy == .regular,
+                  let id = app.bundleIdentifier, ids.contains(id) else { continue }
             let pid = app.processIdentifier
             let name = app.localizedName ?? id
             do {
@@ -188,16 +189,15 @@ final class BrowserThrottle {
     /// Quit the browser, wait up to 10 s for it to exit, relaunch it with
     /// both flags (and the same profile arguments it had).
     func relaunchUnthrottled(bundleId: String) async {
-        let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleId }
-        var extra: [String] = []
-        if let main = running.first {
-            if let args = try? await readArgs(main.processIdentifier) {
-                extra = ChromiumFlags.preservedArgs(args: args)
-            }
-        }
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleId)
+            .filter { $0.activationPolicy == .regular }
+        guard let main = running.first else { return }
+        let args = try? await readArgs(main.processIdentifier)
+        let extra = args.map(ChromiumFlags.preservedArgs) ?? []
         let terminated = await ApplicationTerminationWaiter(applications: running).terminateAndWait(timeout: 10)
         if !terminated {
-            Log.error("relaunch: \(bundleId) did not quit within 10 s; launching anyway")
+            Log.error("relaunch: \(bundleId) did not quit within 10 s")
+            return
         }
         do {
             let r = try await Shell.run("/usr/bin/open", ["-b", bundleId, "--args"] + ChromiumFlags.required + extra, timeout: 15)

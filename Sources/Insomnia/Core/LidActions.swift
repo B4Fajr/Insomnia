@@ -8,7 +8,7 @@ import Foundation
 /// first, then set both to 0 and ask the display to sleep), mute (save
 /// volume + mute state first), freeze scope (the freeze list plus every
 /// other Dock app when `freezeAllApps` is on; one journal write per app),
-/// Docker rule, stop the countdown redraw.
+/// Docker rule.
 /// Order on open: the exact reverse, driven by `SessionManager.undoLidActions`.
 @MainActor
 final class LidActions {
@@ -73,8 +73,6 @@ final class LidActions {
             if let dockerGroup {
                 freeze(dockerGroup, docker: true, manager: manager)
             }
-
-            manager.pauseCountdown()
         }
         if !ran { Log.error("lid close actions skipped: recovery lock busy") }
     }
@@ -85,8 +83,6 @@ final class LidActions {
             return
         }
         await manager.undoLidActions()
-        guard manager.isActive, !Task.isCancelled else { return }
-        manager.resumeCountdown()
     }
 
     // MARK: Private

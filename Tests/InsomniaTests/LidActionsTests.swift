@@ -51,6 +51,25 @@ final class LidActionsTests: XCTestCase {
         (try? String(contentsOf: h.home.paths.logFile, encoding: .utf8)) ?? ""
     }
 
+    func testCountdownStaysArmedAcrossLidCloseAndTheNextSession() async {
+        let (m, actions) = await make()
+        await m.start(duration: 3600)
+        h.clamshell.closed = true
+        await actions.onClose()
+        XCTAssertTrue(m.countdownTimerArmed)
+
+        await m.end(reason: .timer)
+        XCTAssertFalse(m.countdownTimerArmed)
+        XCTAssertEqual(m.countdownText, "")
+
+        // The lid can reopen while the session's lid observer is stopped.
+        h.clamshell.closed = false
+        await m.start(duration: 12 * 3600)
+        XCTAssertTrue(m.countdownTimerArmed)
+        XCTAssertEqual(m.countdownText, "12:00")
+        await m.end(reason: .user)
+    }
+
     // MARK: Trusted brightness samples
 
     /// The live defect: the lid coming down covers the light sensor and

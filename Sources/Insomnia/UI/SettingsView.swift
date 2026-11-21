@@ -9,8 +9,7 @@ struct SettingsView: View {
     let secrets: any HotspotSecretStore
     let locationPermission: LocationPermission
 
-    @State private var newPreset = ""
-    @State private var presetError: String?
+    @State private var chargingDuration = ""
     @State private var newFreezeBundle = ""
     @State private var newAgentBundle = ""
     @State private var newTmuxTarget = ""
@@ -23,7 +22,7 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            sessionSection
+            chargingSection
             lidSection
             agentSection
             powerSection
@@ -46,88 +45,57 @@ struct SettingsView: View {
 
     // MARK: Bindings
 
-    private func bind<T: Equatable>(_ keyPath: WritableKeyPath<Config, T>) -> Binding<T> {
+    private func bind<T>(_ keyPath: WritableKeyPath<Config, T>) -> Binding<T> {
         Binding(
             get: { manager.config[keyPath: keyPath] },
-            set: { value in
-                guard manager.config[keyPath: keyPath] != value else { return }
-                manager.config[keyPath: keyPath] = value
-                save()
-            }
+            set: { value in update { $0[keyPath: keyPath] = value } }
         )
     }
 
-    private func save() {
-        do {
-            try manager.store.saveConfig(manager.config)
-        } catch {
-            Log.error("could not save config: \(error.localizedDescription)")
-        }
-    }
-
     private func update(_ change: (inout Config) -> Void) {
-        var c = manager.config
-        change(&c)
-        guard c != manager.config else { return }
-        manager.config = c
-        save()
+        manager.updateConfig(change)
     }
 
     // MARK: Sections
 
-    private var sessionSection: some View {
-        Section("Session") {
-            ForEach(manager.config.presets, id: \.self) { p in
+    private var chargingSection: some View {
+        Section {
+            Toggle(StatusMenu.chargingTitle, isOn: bind(\.startOnACPower))
+            LabeledContent("Automatic session duration") {
                 HStack {
-                    Text(chipLabel(for: p))
-                        .monospacedDigit()
-                    Spacer()
-                    if p == manager.config.defaultPreset {
-                        Text("default").font(.caption).foregroundStyle(.secondary)
-                    }
-                    removeButton {
-                        update { $0.presets.removeAll { $0 == p } }
-                    }
+                    TextField("Automatic session duration in hours", text: $chargingDuration, prompt: Text(chargingDurationLabel))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 100)
+                        .onSubmit(saveChargingDuration)
+                    Text("hours")
+                        .foregroundStyle(.secondary)
+                    Button("Set", action: saveChargingDuration)
+                        .disabled(parsedChargingDuration == nil)
                 }
             }
-            HStack {
-                TextField("Add preset (30m, 2h, 1h30m, 3d)", text: $newPreset)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(addPreset)
-                Button("Add", action: addPreset)
-                    .disabled(DurationParser.seconds(from: newPreset) == nil)
-            }
-            if let presetError {
-                Text(presetError).font(.caption).foregroundStyle(.red)
-            }
-            Picker("Default preset", selection: bind(\.defaultPreset)) {
-                ForEach(manager.config.presets, id: \.self) { p in
-                    Text(chipLabel(for: p)).tag(p)
-                }
-                if !manager.config.presets.contains(manager.config.defaultPreset) {
-                    Text(chipLabel(for: manager.config.defaultPreset)).tag(manager.config.defaultPreset)
-                }
-            }
-            LabeledContent("Maximum session") {
-                Text(chipLabel(for: manager.config.maxDuration)).foregroundStyle(.secondary)
-            }
+        } header: {
+            Text("Charging automation")
+        } footer: {
+            Text("Connecting power starts a timer when Insomnia is idle. Disconnecting power ends that timer.")
         }
     }
 
-    private func addPreset() {
-        guard let s = DurationParser.seconds(from: newPreset) else { return }
-        guard s <= manager.config.maxDuration else {
-            presetError = "Presets cannot exceed \(chipLabel(for: manager.config.maxDuration))."
-            return
-        }
-        presetError = nil
-        update {
-            if !$0.presets.contains(s) {
-                $0.presets.append(s)
-                $0.presets.sort()
-            }
-        }
-        newPreset = ""
+    private var chargingDurationLabel: String {
+        let duration = SessionMath.clamp(manager.config.acSessionDuration, maxDuration: manager.config.maxDuration)
+        return (duration / 3600).formatted(.number.grouping(.never).precision(.fractionLength(0...4)))
+    }
+
+    private var parsedChargingDuration: TimeInterval? {
+        guard let duration = DurationParser.seconds(fromHours: chargingDuration),
+              duration == SessionMath.clamp(duration, maxDuration: manager.config.maxDuration) else { return nil }
+        return duration
+    }
+
+    private func saveChargingDuration() {
+        guard let duration = parsedChargingDuration else { return }
+        update { $0.acSessionDuration = duration }
+        if manager.config.acSessionDuration == duration { chargingDuration = "" }
     }
 
     private var lidSection: some View {
